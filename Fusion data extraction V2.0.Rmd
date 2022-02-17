@@ -1,0 +1,164 @@
+---
+title: "Fusion data extraction V2.0.rmd"
+output: html_notebook
+---
+```{r}
+#This project requires 3 plugins, which can be installed with this code:
+install.packages("odbc")
+install.packages("DBI")
+install.packages("tidyverse")
+```
+
+```{r}
+#Loading libraries. After the packages above are installed, they need to be loaded. They only need to be installed on a computer once, but they need to be loaded every time RStudio is opened.
+#The memory.limit function was required on the computer I used to increase the memory size so that large tables could be loaded. It may not be needed in all cases.
+library(DBI)
+library(odbc)
+library(tidyverse)
+memory.limit(size=56000)
+```
+
+```{r}
+#This code connects to the Fusion database. The computer RStudio is running on needs to have a Fusion connection named "Fusion." See PowerPoint file for instructions on how to create a connection on a Windows computer.
+
+#Connecting to the Fusion database. You will be asked for the username and password for the Fusion database when you first connect.
+con <- dbConnect(
+  odbc::odbc(), 
+  "Fusion",
+  UID = rstudioapi::askForPassword("Database user"),
+  PWD = rstudioapi::askForPassword("Database password")
+  )
+
+
+#The code below is error-correcting code that determines the formats of the tables in the database, and generates a new function to make extracting the them easier. 
+
+testpull <- function(con, tbnm, rownumber, ls_colnm, sp, ep) {
+  re <- tryCatch({
+    # try to query database based on given start point and end point of column
+    dt <- dbGetQuery(con, paste("SELECT TOP", rownumber, paste0(ls_colnm[sp:ep], collapse = ', '), "FROM", tbnm))
+    return(dt)
+  },
+  error = function(error_message) {
+    return("error")
+  },
+  warning = function(warning_message) {
+    return("warning")
+  }
+  )
+}
+pull <- function(con, tbnm) {
+  # get total row number based on table name
+  rownumber <- dbGetQuery(con, paste("SELECT count(*) FROM", tbnm))[[1]]
+  # get all column names of the table
+  ls_colnm <- c(dbGetQuery(con, paste("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='",tbnm,"'",sep=""))$COLUMN_NAME)
+  # set up variables for iteration
+  colnumber <- length(ls_colnm)
+  mincolnbr <- 1
+  maxcolnbr <- colnumber
+  sp <- mincolnbr
+  ep <- maxcolnbr
+  # initiate an empty dataframe
+  df_total <- setNames(data.frame(matrix(nrow=rownumber, ncol=1)),c("x"))
+  
+  while (dim(df_total)[2] < maxcolnbr) {
+    #print(c(sp,ep))
+    df_test <- testpull(con, tbnm, rownumber, ls_colnm, sp, ep)
+    #print(typeof(df_test))
+    if (typeof(df_test) == "list") {
+      # save successfully pulled data
+      if (c(colnames(df_total))[1] == "x") {
+        df_total <- subset(cbind(df_total, df_test),select=-c(x))
+      }
+      else {
+        df_total <- cbind(df_total, df_test)
+      }
+      if (dim(df_total)[2] < maxcolnbr) {
+        # adjust both start and end points when testpull succeeded
+        sp <- ep + 1
+        ep <- maxcolnbr
+        #print(c(sp, ep))
+      }
+    }
+    else {
+      dbDisconnect(con)
+      con <- dbConnect(odbc(), "HLAFUSION", timeout = 10)
+      # adjust end point when testpull failed
+      ep <- floor(sp-1+((ep-(sp-1))/2))
+      #print(c(sp, ep))
+    }
+  }
+  return(df_total)
+}
+
+#Pulling a list of available tables in Fusion and adding it to "FusiontableList"
+(FusiontableList <- dbListTables(con) %>% as_tibble)
+
+#This will show all of the tables in the Fusion database.
+```
+
+```{r}
+#Extract and save 
+
+(Sample <- pull(con, "SAMPLE") %>% as_tibble)
+
+#The code below saves the table in "rds" format, an R format that preserves the table structure, and results in smaller files than "csv.gz." The only limitation is the rds file can only be opened in R. If for some reason you need to read the files by another system, use the second line of code (remove the "#") to save it as a csv.gz file.
+saveRDS(Sample, file = "Sample.rds")
+#Sample %>% write_csv("Sample.csv.gz")
+```
+
+```{r}
+#Extract and save 
+
+(Well <- pull(con, "WELL") %>% as_tibble)
+
+#The code below saves the table in "rds" format, an R format that preserves the table structure, and results in smaller files than "csv.gz." The only limitation is the rds file can only be opened in R. If for some reason you need to read the files by another system, use the second line of code (remove the "#") to save it as a csv.gz file.
+saveRDS(Well, file = "Well.rds")
+#Sample %>% write_csv("Sample.csv.gz")
+```
+
+
+
+```{r}
+#Extract and save WELL_DETAIL table
+
+(Well_Detail <- pull(con, "WELL_DETAIL") %>% as_tibble)
+#Well_Detail %>% write_csv("Well_Detail.csv.gz")
+saveRDS(Well_Detail, file = "Well_Detail.rds")
+```
+
+```{r}
+#Extract and save TRAY table
+
+(Tray <- pull(con, "TRAY") %>% as_tibble)
+saveRDS(Tray, file = "Tray.rds")
+```
+
+```{r}
+#Extract and save PRODUCT table
+
+(Product <- pull(con, "PRODUCT") %>% as_tibble)
+saveRDS(Product, file = "Product.rds")
+```
+
+```{r}
+#Extract and save WELL_RESULT table
+#This table appears to be too big to extract - it appears to be extracting succsessfully for quite a while, and then crashes. Try connecting and using dplyr instead.
+
+(Well_result_db <- tbl(con, "WELL_RESULT"))
+
+Well_result_db %>% filter(WellID == "2CF863DB-5CEB-4DB8-88CA-5D34EBA36EEE")
+
+#(Well_result <- pull(con, "WELL_RESULT") %>% as_tibble)
+#saveRDS(Well_result, file = "Well_result.rds")
+```
+
+```{r}
+#Extract and save PRODUCT_DETAIL table
+
+(Product_detail <- pull(con, "PRODUCT_DETAIL") %>% as_tibble)
+#Well_Detail %>% write_csv("Well_Detail.csv.gz")
+saveRDS(Product_detail, file = "Product_detail.rds")
+```
+
+
+
